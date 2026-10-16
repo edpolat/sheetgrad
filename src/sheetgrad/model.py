@@ -1,7 +1,13 @@
+import math
+
 import openpyxl
 
 from sheetgrad.engine import Value
 from sheetgrad.formula import evaluate
+
+
+def _sort_key(number):
+    return float("inf") if math.isnan(number) else abs(number)
 
 
 class CircularReferenceError(Exception):
@@ -18,6 +24,7 @@ class Model:
         self._cache = {}
         self._in_progress = []
         self.inputs = {}
+        self.overrides = {}
 
     @classmethod
     def from_excel(cls, path, sheet_name=None):
@@ -57,7 +64,7 @@ class Model:
             raise FormulaError(f"{ref} hücresinde mantıksal değer var: {raw}")
 
         if isinstance(raw, (int, float)):
-            value = Value(float(raw))
+            value = Value(float(self.overrides.get(ref, raw)))
             self.inputs[ref] = value
             return value
 
@@ -79,9 +86,13 @@ class Model:
         left = self.sheet.cell(row=int(row), column=self.sheet[ref].column - 1).value
         return left if isinstance(left, str) and left.strip() else ref
 
-    def sensitivities(self, output_ref):
+    def run(self, output_ref, overrides=None):
         self.reset()
-        output = self.cell(output_ref)
+        self.overrides = {k.upper(): v for k, v in (overrides or {}).items()}
+        return self.cell(output_ref)
+
+    def sensitivities(self, output_ref, overrides=None):
+        output = self.run(output_ref, overrides)
         output.backward()
         rows = [
             {
@@ -89,8 +100,9 @@ class Model:
                 "label": self.label(ref),
                 "value": value.data,
                 "gradient": value.grad,
+                "impact_1pct": value.grad * value.data * 0.01,
             }
             for ref, value in self.inputs.items()
         ]
-        rows.sort(key=lambda row: abs(row["gradient"]), reverse=True)
+        rows.sort(key=lambda row: _sort_key(row["impact_1pct"]), reverse=True)
         return output.data, rows

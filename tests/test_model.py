@@ -48,9 +48,23 @@ def test_duyarliliklar(kar_modeli):
     })
 
 
-def test_etkiye_gore_sirali(kar_modeli):
+def test_yuzde_bir_etkisi(kar_modeli):
     _, satirlar = kar_modeli.sensitivities("B13")
-    assert [s["label"] for s in satirlar[:2]] == ["Birim maliyet", "Fiyat"]
+    etkiler = {s["label"]: s["impact_1pct"] for s in satirlar}
+    assert etkiler == pytest.approx({
+        "Birim maliyet": -1200,    # -2000 × 60 × %1
+        "Fiyat": 400,              # 400 × 100 × %1
+        "Maaşlar": -400,
+        "Reklam bütçesi": 200,     # 1 × 20000 × %1
+        "Kira": -150,
+    })
+
+
+def test_yuzde_etkiye_gore_sirali(kar_modeli):
+    _, satirlar = kar_modeli.sensitivities("B13")
+    mutlak = [abs(s["impact_1pct"]) for s in satirlar]
+    assert mutlak == sorted(mutlak, reverse=True)
+    assert satirlar[0]["label"] == "Birim maliyet"
 
 
 def test_iki_kez_cagrilinca_turevler_birikmez(kar_modeli):
