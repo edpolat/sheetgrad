@@ -25,6 +25,7 @@ class Model:
         self._in_progress = []
         self.inputs = {}
         self.overrides = {}
+        self.notes = []
 
     @classmethod
     def from_excel(cls, path, sheet_name=None):
@@ -36,6 +37,7 @@ class Model:
         self._cache = {}
         self._in_progress = []
         self.inputs = {}
+        self.notes = []
 
     def cell(self, ref):
         ref = ref.upper()
@@ -69,12 +71,18 @@ class Model:
             return value
 
         if isinstance(raw, str) and raw.startswith("="):
+            notes = []
             try:
-                return evaluate(raw, self.cell)
+                result = evaluate(raw, self.cell, notes)
             except (CircularReferenceError, FormulaError):
                 raise
             except Exception as error:
                 raise FormulaError(f"{ref} hücresinde ({raw}): {error}") from error
+            for note in notes:
+                line = f"{ref}: {note}"
+                if line not in self.notes:
+                    self.notes.append(line)
+            return result
 
         raise FormulaError(f"{ref} hücresinde sayı yerine metin var: {raw!r}")
 

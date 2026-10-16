@@ -1,3 +1,4 @@
+import math
 import re
 
 from sheetgrad.engine import Value
@@ -8,7 +9,7 @@ TOKEN_PATTERN = re.compile(
         (?P<NUMBER>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)
       | (?P<FUNC>[A-Za-z][A-Za-z0-9.]*(?=\())
       | (?P<CELL>\$?[A-Za-z]{1,3}\$?\d+)
-      | (?P<OP>[-+*/^])
+      | (?P<OP><=|>=|<>|[-+*/^<>=])
       | (?P<LPAREN>\()
       | (?P<RPAREN>\))
       | (?P<COMMA>,)
@@ -101,19 +102,74 @@ def _single(name, args):
     return args[0]
 
 
+def _pick(name, args, notes, choose):
+    values = _flatten(args)
+    if not values:
+        raise ValueError(f"{name} en az bir değer alır")
+    best = choose(values, key=lambda v: v.data)
+    ties = [v for v in values if v.data == best.data]
+    if len(ties) > 1:
+        notes.append(
+            f"{name} içinde eşit değerler var ({best.data:g}); türev, ilk seçilene göre hesaplandı"
+        )
+    return best
+
+
+def _abs(args, notes):
+    x = _single("ABS", args)
+    if x.data == 0:
+        notes.append("ABS sıfır noktasında; burada türev tanımsız, 0 kabul edildi")
+    return x * (1 if x.data > 0 else -1 if x.data < 0 else 0)
+
+
+def excel_round(number, digits):
+    factor = 10 ** digits
+    return math.copysign(math.floor(abs(number) * factor + 0.5) / factor, number)
+
+
+def _round(args, notes):
+    if len(args) != 2 or any(isinstance(a, list) for a in args):
+        raise ValueError("ROUND iki değer alır: ROUND(sayı, basamak)")
+    x, digits = args
+    out = Value(excel_round(x.data, int(digits.data)), (x,), "ROUND")
+
+    def _backward():
+        # Gerçek türev neredeyse her yerde 0'dır. Onun yerine türevi olduğu gibi
+        # geçiriyoruz ("straight-through"); yoksa yuvarlanan her şey etkisiz görünür.
+        x.grad += out.grad
+
+    out._backward = _backward
+    notes.append("ROUND türevi yuvarlama yokmuş gibi hesaplandı (straight-through)")
+    return out
+
+
 FUNCTIONS = {
-    "SUM": _sum,
-    "AVERAGE": _average,
-    "EXP": lambda args: _single("EXP", args).exp(),
-    "LN": lambda args: _single("LN", args).log(),
+    "SUM": lambda args, notes: _sum(args),
+    "AVERAGE": lambda args, notes: _average(args),
+    "EXP": lambda args, notes: _single("EXP", args).exp(),
+    "LN": lambda args, notes: _single("LN", args).log(),
+    "MIN": lambda args, notes: _pick("MIN", args, notes, min),
+    "MAX": lambda args, notes: _pick("MAX", args, notes, max),
+    "ABS": _abs,
+    "ROUND": _round,
+}
+
+COMPARISONS = {
+    "=": lambda a, b: a == b,
+    "<>": lambda a, b: a != b,
+    "<": lambda a, b: a < b,
+    ">": lambda a, b: a > b,
+    "<=": lambda a, b: a <= b,
+    ">=": lambda a, b: a >= b,
 }
 
 
 class Parser:
-    def __init__(self, tokens, get_cell):
+    def __init__(self, tokens, get_cell, notes=None):
         self.tokens = tokens
         self.pos = 0
         self.get_cell = get_cell
+        self.notes = notes if notes is not None else []
 
     def peek(self):
         if self.pos < len(self.tokens):
@@ -132,12 +188,31 @@ class Parser:
         return token
 
     def parse(self):
-        result = self.expression()
+        result = self.comparison()
         if self.peek()[0] is not None:
             raise ValueError(f"Fazladan ifade: {self.peek()[1]!r}")
         if isinstance(result, list):
             raise ValueError("Aralık (A1:A3) sadece fonksiyon içinde kullanılabilir")
         return result
+
+    # comparison := expression [('=' | '<>' | '<' | '>' | '<=' | '>=') expression]
+    def comparison(self):
+        left = self.expression()
+        kind, op = self.peek()
+        if kind == "OP" and op in COMPARISONS:
+            self.take()
+            right = self.expression()
+            if isinstance(left, list) or isinstance(right, list):
+                raise ValueError("Aralıklar karşılaştırılamaz")
+            a, b = left.data, right.data
+            if op not in ("=", "<>") and abs(a - b) <= 0.01 * max(abs(a), abs(b), 1):
+                self.notes.append(
+                    f"Koşul sınıra çok yakın ({a:g} {op} {b:g}); küçük bir değişiklik "
+                    "sonucu sıçratabilir ve türev bu sıçramayı görmez"
+                )
+            # Karşılaştırmanın sonucu 1 (doğru) veya 0 (yanlış) ve girdilere göre türevi 0
+            return Value(1.0 if COMPARISONS[op](a, b) else 0.0)
+        return left
 
     # expression := term (('+' | '-') term)*
     def expression(self):
@@ -194,26 +269,67 @@ class Parser:
 
         if kind == "FUNC":
             self.take()
+            if value == "IF":
+                return self.if_function()
             if value not in FUNCTIONS:
                 raise NotImplementedError(f"Desteklenmeyen fonksiyon: {value}")
             self.take("LPAREN")
             args = []
             if self.peek()[0] != "RPAREN":
-                args.append(self.expression())
+                args.append(self.comparison())
                 while self.peek()[0] == "COMMA":
                     self.take()
-                    args.append(self.expression())
+                    args.append(self.comparison())
             self.take("RPAREN")
-            return FUNCTIONS[value](args)
+            return FUNCTIONS[value](args, self.notes)
 
         if kind == "LPAREN":
             self.take()
-            result = self.expression()
+            result = self.comparison()
             self.take("RPAREN")
             return result
 
         raise ValueError(f"Beklenmeyen ifade: {value!r}")
 
 
-def evaluate(text: str, get_cell) -> Value:
-    return Parser(tokenize(text), get_cell).parse()
+    # IF(koşul, doğruysa, yanlışsa): Excel gibi sadece seçilen dalı hesaplar
+    def if_function(self):
+        self.take("LPAREN")
+        condition = self.comparison()
+        if isinstance(condition, list):
+            raise ValueError("IF koşulu bir aralık olamaz")
+        self.take("COMMA")
+
+        if condition.data != 0:
+            result = self.comparison()
+            if self.peek()[0] == "COMMA":
+                self.take()
+                self.skip_argument()
+        else:
+            self.skip_argument()
+            if self.peek()[0] == "COMMA":
+                self.take()
+                result = self.comparison()
+            else:
+                result = Value(0.0)   # Excel: IF(yanlış, x) → FALSE, yani 0
+
+        self.take("RPAREN")
+        return result
+
+    def skip_argument(self):
+        depth = 0
+        while True:
+            kind, _ = self.peek()
+            if kind is None:
+                raise ValueError("Formül beklenmedik şekilde bitti")
+            if depth == 0 and kind in ("COMMA", "RPAREN"):
+                return
+            if kind == "LPAREN":
+                depth += 1
+            elif kind == "RPAREN":
+                depth -= 1
+            self.take()
+
+
+def evaluate(text: str, get_cell, notes=None) -> Value:
+    return Parser(tokenize(text), get_cell, notes).parse()

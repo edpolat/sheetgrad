@@ -18,6 +18,8 @@ satirlar = [
     ("Değişken maliyet", "=B3*B9"),
     ("Toplam gider", "=B11+B4+B5+B6"),
     ("Kâr", "=B10-B12"),
+    ("Vergi", "=MAX(0, B13)*0.2"),
+    ("Net kâr", "=B13-B14"),
 ]
 
 for satir, (etiket, deger) in enumerate(satirlar, start=1):

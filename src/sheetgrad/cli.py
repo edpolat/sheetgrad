@@ -33,6 +33,15 @@ def bar(value, largest, width=20):
     return "█" * max(1, round(abs(value) / largest * width))
 
 
+def print_notes(notes, color):
+    if not notes:
+        return
+    print(paint("Uyarılar:", BOLD, color))
+    for note in notes:
+        print(paint(f"  • {note}", DIM, color))
+    print()
+
+
 def print_report(model, output_ref, output_value, rows, color):
     label = model.label(output_ref.upper())
     print()
@@ -65,6 +74,7 @@ def print_report(model, output_ref, output_value, rows, color):
         print(f"Uyarı: {', '.join(map(str, undefined))} için türev tanımsız "
               "(ör. negatif tabanlı bir sayının üssü).")
     print()
+    print_notes(model.notes, color)
 
 
 def print_goal_report(model, output_ref, result, color):
@@ -99,6 +109,7 @@ def print_goal_report(model, output_ref, result, color):
             f"{r['new']:>14,.2f}  " + paint(f"{pct:>9}", tone, color)
         )
     print()
+    print_notes(result["notes"], color)
 
 
 def main(argv=None):

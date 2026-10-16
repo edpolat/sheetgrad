@@ -60,6 +60,8 @@ def goal_seek(model, output_ref, target, cells=None, max_steps=2000, tolerance=1
             break
 
     final = to_values(u)
+    model.run(output_ref, final)
+    notes = list(model.notes)
     changes = []
     for c in cells:
         old, new = base[c], final[c]
@@ -80,4 +82,5 @@ def goal_seek(model, output_ref, target, cells=None, max_steps=2000, tolerance=1
         "reached": abs(output - target) <= tolerance * norm,
         "steps": steps,
         "changes": changes,
+        "notes": notes,
     }
