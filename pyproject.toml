@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sheetgrad"
+version = "0.1.0"
+description = "Excel modellerinde otomatik türev ile duyarlılık analizi ve hedef arama"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
